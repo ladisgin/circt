@@ -522,7 +522,6 @@ struct RvalueExprVisitor {
 
     // Traverse open range list.
     for (const auto *listExpr : expr.rangeList()) {
-      Value cond;
       // The open range list on the right-hand side of the inside operator is a
       // comma-separated list of expressions or ranges.
       if (const auto *openRange =
@@ -549,7 +548,8 @@ struct RvalueExprVisitor {
         } else {
           rightValue = builder.create<moore::UleOp>(loc, lhs, highBound);
         }
-        cond = builder.create<moore::AndOp>(loc, leftValue, rightValue);
+        conditions.push_back(
+            builder.create<moore::AndOp>(loc, leftValue, rightValue));
       } else {
         // Handle expressions.
         if (!listExpr->type->isSimpleBitVector()) {
@@ -560,11 +560,9 @@ struct RvalueExprVisitor {
               auto value = context.convertRvalueExpression(*listExpr);
               if (!value)
                 return {};
-              context.collectConditionsForUnpackedArray(uaType, value,
-                                                        conditions, lhs, loc);
-              cond = conditions.back();
-              conditions
-                  .pop_back(); // avoiding repetition of cond in the vector
+              if (failed(context.collectConditionsForUnpackedArray(
+                      uaType, value, conditions, lhs, loc)))
+                return {};
             } else {
               mlir::emitError(loc, "unsized unpacked arrays in 'inside' "
                                    "expressions not supported");
@@ -581,10 +579,10 @@ struct RvalueExprVisitor {
               context.convertRvalueExpression(*listExpr));
           if (!value)
             return {};
-          cond = builder.create<moore::WildcardEqOp>(loc, lhs, value);
+          conditions.push_back(
+              builder.create<moore::WildcardEqOp>(loc, lhs, value));
         }
       }
-      conditions.push_back(cond);
     }
 
     // Calculate the final result by `or` op.
@@ -1118,15 +1116,13 @@ Value Context::materializeConversion(Type type, Value value, bool isSigned,
   return value;
 }
 
-void Context::collectConditionsForUnpackedArray(
+LogicalResult Context::collectConditionsForUnpackedArray(
     const slang::ast::FixedSizeUnpackedArrayType &slangType,
     Value upackedArrayValue, SmallVector<Value> &conditions, Value lhs,
     Location loc) {
-  Value cond;
   auto type = convertType(slangType);
   if (!type) {
-    mlir::emitError(loc, "can't convert slang::ast::FixedSizeUnpackedArrayType "
-                         "to moore::UnpackedArrayType");
+    return failure();
   }
   auto mooreType = dyn_cast<moore::UnpackedArrayType>(type);
   const auto &elementType = slangType.elementType;
@@ -1135,21 +1131,24 @@ void Context::collectConditionsForUnpackedArray(
     auto elemValue = builder.create<moore::ExtractOp>(
         loc, mooreType.getElementType(), upackedArrayValue, i);
     if (elementType.isUnpackedArray()) {
-      collectConditionsForUnpackedArray(
-          elementType.as<slang::ast::FixedSizeUnpackedArrayType>(), elemValue,
-          conditions, lhs, loc);
+      if (failed(collectConditionsForUnpackedArray(
+              elementType.as<slang::ast::FixedSizeUnpackedArrayType>(),
+              elemValue, conditions, lhs, loc))) {
+        return failure();
+      }
     } else if (elementType.isSingular()) {
       if (elementType.isIntegral()) {
-        cond = builder.create<moore::WildcardEqOp>(loc, lhs, elemValue);
+        conditions.push_back(
+            builder.create<moore::WildcardEqOp>(loc, lhs, elemValue));
       } else {
-        cond = builder.create<moore::EqOp>(loc, lhs, elemValue);
+        conditions.push_back(builder.create<moore::EqOp>(loc, lhs, elemValue));
       }
-      conditions.push_back(cond);
     } else {
-      mlir::emitError(loc,
-                      "only singular values and fixed-size unpacked arrays "
-                      "allowed as elements of unpacked arrays in 'inside' "
-                      "expressions");
+      return mlir::emitError(
+          loc, "only singular values and fixed-size unpacked arrays "
+               "allowed as elements of unpacked arrays in 'inside' "
+               "expressions");
     }
   }
+  return success();
 }
