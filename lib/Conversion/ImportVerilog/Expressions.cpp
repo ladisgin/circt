@@ -787,7 +787,6 @@ struct RvalueExprVisitor : public ExprVisitor {
 
     // Traverse open range list.
     for (const auto *listExpr : expr.rangeList()) {
-      Value cond;
       // The open range list on the right-hand side of the inside operator is a
       // comma-separated list of expressions or ranges.
       if (const auto *openRange =
@@ -814,6 +813,8 @@ struct RvalueExprVisitor : public ExprVisitor {
         } else {
           rightValue = moore::UleOp::create(builder, loc, lhs, highBound);
         }
+        conditions.push_back(
+            builder.create<moore::AndOp>(loc, leftValue, rightValue));
         cond = moore::AndOp::create(builder, loc, leftValue, rightValue);
       } else {
         // Handle expressions.
@@ -825,11 +826,9 @@ struct RvalueExprVisitor : public ExprVisitor {
               auto value = context.convertRvalueExpression(*listExpr);
               if (!value)
                 return {};
-              context.collectConditionsForUnpackedArray(uaType, value,
-                                                        conditions, lhs, loc);
-              cond = conditions.back();
-              conditions
-                  .pop_back(); // avoiding repetition of cond in the vector
+              if (failed(context.collectConditionsForUnpackedArray(
+                      uaType, value, conditions, lhs, loc)))
+                return {};
             } else {
               mlir::emitError(loc, "unsized unpacked arrays in 'inside' "
                                    "expressions not supported");
@@ -846,7 +845,8 @@ struct RvalueExprVisitor : public ExprVisitor {
               context.convertRvalueExpression(*listExpr));
           if (!value)
             return {};
-          cond = builder.create<moore::WildcardEqOp>(loc, lhs, value);
+          conditions.push_back(
+              builder.create<moore::WildcardEqOp>(loc, lhs, value));
         }
             mlir::emitError(
                 loc, "unpacked arrays in 'inside' expressions not supported");
@@ -863,7 +863,6 @@ struct RvalueExprVisitor : public ExprVisitor {
           return {};
         cond = moore::WildcardEqOp::create(builder, loc, lhs, value);
       }
-      conditions.push_back(cond);
     }
 
     // Calculate the final result by `or` op.
@@ -1540,15 +1539,199 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
   return systemCallRes();
 }
 
-void Context::collectConditionsForUnpackedArray(
+FailureOr<Value>
+Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
+                                 Location loc, Value value) {
+  auto systemCallRes =
+      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          // Signed and unsigned system functions.
+          .Case("$signed", [&]() { return value; })
+          .Case("$unsigned", [&]() { return value; })
+
+          // Math functions in SystemVerilog.
+          .Case("$clog2",
+                [&]() -> FailureOr<Value> {
+                  value = convertToSimpleBitVector(value);
+                  if (!value)
+                    return failure();
+                  return (Value)moore::Clog2BIOp::create(builder, loc, value);
+                })
+          .Case("$ln",
+                [&]() -> Value {
+                  return moore::LnBIOp::create(builder, loc, value);
+                })
+          .Case("$log10",
+                [&]() -> Value {
+                  return moore::Log10BIOp::create(builder, loc, value);
+                })
+          .Case("$sin",
+                [&]() -> Value {
+                  return moore::SinBIOp::create(builder, loc, value);
+                })
+          .Case("$cos",
+                [&]() -> Value {
+                  return moore::CosBIOp::create(builder, loc, value);
+                })
+          .Case("$tan",
+                [&]() -> Value {
+                  return moore::TanBIOp::create(builder, loc, value);
+                })
+          .Case("$exp",
+                [&]() -> Value {
+                  return moore::ExpBIOp::create(builder, loc, value);
+                })
+          .Case("$sqrt",
+                [&]() -> Value {
+                  return moore::SqrtBIOp::create(builder, loc, value);
+                })
+          .Case("$floor",
+                [&]() -> Value {
+                  return moore::FloorBIOp::create(builder, loc, value);
+                })
+          .Case("$ceil",
+                [&]() -> Value {
+                  return moore::CeilBIOp::create(builder, loc, value);
+                })
+          .Case("$asin",
+                [&]() -> Value {
+                  return moore::AsinBIOp::create(builder, loc, value);
+                })
+          .Case("$acos",
+                [&]() -> Value {
+                  return moore::AcosBIOp::create(builder, loc, value);
+                })
+          .Case("$atan",
+                [&]() -> Value {
+                  return moore::AtanBIOp::create(builder, loc, value);
+                })
+          .Case("$sinh",
+                [&]() -> Value {
+                  return moore::SinhBIOp::create(builder, loc, value);
+                })
+          .Case("$cosh",
+                [&]() -> Value {
+                  return moore::CoshBIOp::create(builder, loc, value);
+                })
+          .Case("$tanh",
+                [&]() -> Value {
+                  return moore::TanhBIOp::create(builder, loc, value);
+                })
+          .Case("$asinh",
+                [&]() -> Value {
+                  return moore::AsinhBIOp::create(builder, loc, value);
+                })
+          .Case("$acosh",
+                [&]() -> Value {
+                  return moore::AcoshBIOp::create(builder, loc, value);
+                })
+          .Case("$atanh",
+                [&]() -> Value {
+                  return moore::AtanhBIOp::create(builder, loc, value);
+                })
+          .Default([&]() -> Value { return {}; });
+  return systemCallRes();
+}
+
+FailureOr<Value>
+Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
+                                 Location loc, Value value) {
+  auto systemCallRes =
+      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
+          // Signed and unsigned system functions.
+          .Case("$signed", [&]() { return value; })
+          .Case("$unsigned", [&]() { return value; })
+
+          // Math functions in SystemVerilog.
+          .Case("$clog2",
+                [&]() -> FailureOr<Value> {
+                  value = convertToSimpleBitVector(value);
+                  if (!value)
+                    return failure();
+                  return (Value)builder.create<moore::Clog2BIOp>(loc, value);
+                })
+          .Case("$ln",
+                [&]() -> Value {
+                  return builder.create<moore::LnBIOp>(loc, value);
+                })
+          .Case("$log10",
+                [&]() -> Value {
+                  return builder.create<moore::Log10BIOp>(loc, value);
+                })
+          .Case("$sin",
+                [&]() -> Value {
+                  return builder.create<moore::SinBIOp>(loc, value);
+                })
+          .Case("$cos",
+                [&]() -> Value {
+                  return builder.create<moore::CosBIOp>(loc, value);
+                })
+          .Case("$tan",
+                [&]() -> Value {
+                  return builder.create<moore::TanBIOp>(loc, value);
+                })
+          .Case("$exp",
+                [&]() -> Value {
+                  return builder.create<moore::ExpBIOp>(loc, value);
+                })
+          .Case("$sqrt",
+                [&]() -> Value {
+                  return builder.create<moore::SqrtBIOp>(loc, value);
+                })
+          .Case("$floor",
+                [&]() -> Value {
+                  return builder.create<moore::FloorBIOp>(loc, value);
+                })
+          .Case("$ceil",
+                [&]() -> Value {
+                  return builder.create<moore::CeilBIOp>(loc, value);
+                })
+          .Case("$asin",
+                [&]() -> Value {
+                  return builder.create<moore::AsinBIOp>(loc, value);
+                })
+          .Case("$acos",
+                [&]() -> Value {
+                  return builder.create<moore::AcosBIOp>(loc, value);
+                })
+          .Case("$atan",
+                [&]() -> Value {
+                  return builder.create<moore::AtanBIOp>(loc, value);
+                })
+          .Case("$sinh",
+                [&]() -> Value {
+                  return builder.create<moore::SinhBIOp>(loc, value);
+                })
+          .Case("$cosh",
+                [&]() -> Value {
+                  return builder.create<moore::CoshBIOp>(loc, value);
+                })
+          .Case("$tanh",
+                [&]() -> Value {
+                  return builder.create<moore::TanhBIOp>(loc, value);
+                })
+          .Case("$asinh",
+                [&]() -> Value {
+                  return builder.create<moore::AsinhBIOp>(loc, value);
+                })
+          .Case("$acosh",
+                [&]() -> Value {
+                  return builder.create<moore::AcoshBIOp>(loc, value);
+                })
+          .Case("$atanh",
+                [&]() -> Value {
+                  return builder.create<moore::AtanhBIOp>(loc, value);
+                })
+          .Default([&]() -> Value { return {}; });
+  return systemCallRes();
+}
+
+LogicalResult Context::collectConditionsForUnpackedArray(
     const slang::ast::FixedSizeUnpackedArrayType &slangType,
     Value upackedArrayValue, SmallVector<Value> &conditions, Value lhs,
     Location loc) {
-  Value cond;
   auto type = convertType(slangType);
   if (!type) {
-    mlir::emitError(loc, "can't convert slang::ast::FixedSizeUnpackedArrayType "
-                         "to moore::UnpackedArrayType");
+    return failure();
   }
   auto mooreType = dyn_cast<moore::UnpackedArrayType>(type);
   const auto &elementType = slangType.elementType;
@@ -1557,21 +1740,24 @@ void Context::collectConditionsForUnpackedArray(
     auto elemValue = builder.create<moore::ExtractOp>(
         loc, mooreType.getElementType(), upackedArrayValue, i);
     if (elementType.isUnpackedArray()) {
-      collectConditionsForUnpackedArray(
-          elementType.as<slang::ast::FixedSizeUnpackedArrayType>(), elemValue,
-          conditions, lhs, loc);
+      if (failed(collectConditionsForUnpackedArray(
+              elementType.as<slang::ast::FixedSizeUnpackedArrayType>(),
+              elemValue, conditions, lhs, loc))) {
+        return failure();
+      }
     } else if (elementType.isSingular()) {
       if (elementType.isIntegral()) {
-        cond = builder.create<moore::WildcardEqOp>(loc, lhs, elemValue);
+        conditions.push_back(
+            builder.create<moore::WildcardEqOp>(loc, lhs, elemValue));
       } else {
-        cond = builder.create<moore::EqOp>(loc, lhs, elemValue);
+        conditions.push_back(builder.create<moore::EqOp>(loc, lhs, elemValue));
       }
-      conditions.push_back(cond);
     } else {
-      mlir::emitError(loc,
-                      "only singular values and fixed-size unpacked arrays "
-                      "allowed as elements of unpacked arrays in 'inside' "
-                      "expressions");
+      return mlir::emitError(
+          loc, "only singular values and fixed-size unpacked arrays "
+               "allowed as elements of unpacked arrays in 'inside' "
+               "expressions");
     }
   }
+  return success();
 }
