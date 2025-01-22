@@ -1144,10 +1144,9 @@ LogicalResult Context::collectConditionsForUnpackedArray(
         conditions.push_back(builder.create<moore::EqOp>(loc, lhs, elemValue));
       }
     } else {
-      return mlir::emitError(
-          loc, "only singular values and fixed-size unpacked arrays "
-               "allowed as elements of unpacked arrays in 'inside' "
-               "expressions");
+      assert(false && "Slang guarantees only singular values and fixed-size "
+                      "unpacked arrays allowed as elements of unpacked arrays "
+                      "in 'inside' expressions");
     }
   }
   return success();
