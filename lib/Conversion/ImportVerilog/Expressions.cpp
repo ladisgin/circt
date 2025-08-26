@@ -813,9 +813,7 @@ struct RvalueExprVisitor : public ExprVisitor {
         } else {
           rightValue = moore::UleOp::create(builder, loc, lhs, highBound);
         }
-        conditions.push_back(
-            builder.create<moore::AndOp>(loc, leftValue, rightValue));
-        cond = moore::AndOp::create(builder, loc, leftValue, rightValue);
+        conditions.push_back(moore::AndOp::create(builder, loc, leftValue, rightValue));
       } else {
         // Handle expressions.
         if (!listExpr->type->isIntegral()) {
@@ -846,22 +844,8 @@ struct RvalueExprVisitor : public ExprVisitor {
           if (!value)
             return {};
           conditions.push_back(
-              builder.create<moore::WildcardEqOp>(loc, lhs, value));
+              moore::WildcardEqOp::create(builder, loc, lhs, value));
         }
-            mlir::emitError(
-                loc, "unpacked arrays in 'inside' expressions not supported");
-            return {};
-          }
-          mlir::emitError(
-              loc, "only simple bit vectors supported in 'inside' expressions");
-          return {};
-        }
-
-        auto value = context.convertToSimpleBitVector(
-            context.convertRvalueExpression(*listExpr));
-        if (!value)
-          return {};
-        cond = moore::WildcardEqOp::create(builder, loc, lhs, value);
       }
     }
 
@@ -1539,99 +1523,6 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
   return systemCallRes();
 }
 
-FailureOr<Value>
-Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
-                                 Location loc, Value value) {
-  auto systemCallRes =
-      llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)
-          // Signed and unsigned system functions.
-          .Case("$signed", [&]() { return value; })
-          .Case("$unsigned", [&]() { return value; })
-
-          // Math functions in SystemVerilog.
-          .Case("$clog2",
-                [&]() -> FailureOr<Value> {
-                  value = convertToSimpleBitVector(value);
-                  if (!value)
-                    return failure();
-                  return (Value)moore::Clog2BIOp::create(builder, loc, value);
-                })
-          .Case("$ln",
-                [&]() -> Value {
-                  return moore::LnBIOp::create(builder, loc, value);
-                })
-          .Case("$log10",
-                [&]() -> Value {
-                  return moore::Log10BIOp::create(builder, loc, value);
-                })
-          .Case("$sin",
-                [&]() -> Value {
-                  return moore::SinBIOp::create(builder, loc, value);
-                })
-          .Case("$cos",
-                [&]() -> Value {
-                  return moore::CosBIOp::create(builder, loc, value);
-                })
-          .Case("$tan",
-                [&]() -> Value {
-                  return moore::TanBIOp::create(builder, loc, value);
-                })
-          .Case("$exp",
-                [&]() -> Value {
-                  return moore::ExpBIOp::create(builder, loc, value);
-                })
-          .Case("$sqrt",
-                [&]() -> Value {
-                  return moore::SqrtBIOp::create(builder, loc, value);
-                })
-          .Case("$floor",
-                [&]() -> Value {
-                  return moore::FloorBIOp::create(builder, loc, value);
-                })
-          .Case("$ceil",
-                [&]() -> Value {
-                  return moore::CeilBIOp::create(builder, loc, value);
-                })
-          .Case("$asin",
-                [&]() -> Value {
-                  return moore::AsinBIOp::create(builder, loc, value);
-                })
-          .Case("$acos",
-                [&]() -> Value {
-                  return moore::AcosBIOp::create(builder, loc, value);
-                })
-          .Case("$atan",
-                [&]() -> Value {
-                  return moore::AtanBIOp::create(builder, loc, value);
-                })
-          .Case("$sinh",
-                [&]() -> Value {
-                  return moore::SinhBIOp::create(builder, loc, value);
-                })
-          .Case("$cosh",
-                [&]() -> Value {
-                  return moore::CoshBIOp::create(builder, loc, value);
-                })
-          .Case("$tanh",
-                [&]() -> Value {
-                  return moore::TanhBIOp::create(builder, loc, value);
-                })
-          .Case("$asinh",
-                [&]() -> Value {
-                  return moore::AsinhBIOp::create(builder, loc, value);
-                })
-          .Case("$acosh",
-                [&]() -> Value {
-                  return moore::AcoshBIOp::create(builder, loc, value);
-                })
-          .Case("$atanh",
-                [&]() -> Value {
-                  return moore::AtanhBIOp::create(builder, loc, value);
-                })
-          .Default([&]() -> Value { return {}; });
-  return systemCallRes();
-}
-
 LogicalResult Context::collectConditionsForUnpackedArray(
     const slang::ast::FixedSizeUnpackedArrayType &slangType,
     Value upackedArrayValue, SmallVector<Value> &conditions, Value lhs,
@@ -1644,7 +1535,7 @@ LogicalResult Context::collectConditionsForUnpackedArray(
   const auto &elementType = slangType.elementType;
   for (slang::int32_t i = slangType.getFixedRange().lower();
        i <= slangType.getFixedRange().upper(); i++) {
-    auto elemValue = builder.create<moore::ExtractOp>(
+    auto elemValue = moore::ExtractOp::create(builder, 
         loc, mooreType.getElementType(), upackedArrayValue, i);
     if (elementType.isUnpackedArray()) {
       if (failed(collectConditionsForUnpackedArray(
@@ -1655,9 +1546,9 @@ LogicalResult Context::collectConditionsForUnpackedArray(
     } else if (elementType.isSingular()) {
       if (elementType.isIntegral()) {
         conditions.push_back(
-            builder.create<moore::WildcardEqOp>(loc, lhs, elemValue));
+            moore::WildcardEqOp::create(builder, loc, lhs, elemValue));
       } else {
-        conditions.push_back(builder.create<moore::EqOp>(loc, lhs, elemValue));
+        conditions.push_back(moore::EqOp::create(builder, loc, lhs, elemValue));
       }
     } else {
       assert(false && "Slang guarantees only singular values and fixed-size "
